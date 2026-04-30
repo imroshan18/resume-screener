@@ -1,4 +1,5 @@
-streamlit
-scikit-learn
-pdfminer.six
-numpy
+streamlit==1.43.2
+numpy==1.26.4
+scikit-learn==1.4.2
+torch==2.2.2
+pdfminer.six==20221105
