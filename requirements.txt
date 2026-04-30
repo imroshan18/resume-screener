@@ -2,3 +2,5 @@ streamlit
 scikit-learn
 pdfminer.six
 numpy
+matplotlib
+reportlab
