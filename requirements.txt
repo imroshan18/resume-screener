@@ -1,5 +1,6 @@
 streamlit
 scikit-learn
 transformers==4.37.2
+tensorflow-cpu==2.15.0
 pdfminer.six
 numpy
