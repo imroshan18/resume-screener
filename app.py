@@ -1,5 +1,4 @@
 import streamlit as st
-import torch
 import pickle
 import re
 import numpy as np
@@ -18,39 +17,19 @@ st.set_page_config(
 # -----------------------------
 # Load Models
 # -----------------------------
-class MLP(torch.nn.Module):
-    def __init__(self, input_size, num_classes):
-        super().__init__()
-        self.model = torch.nn.Sequential(
-            torch.nn.Linear(input_size, 256),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(0.4),
-            torch.nn.Linear(256, 128),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(0.4),
-            torch.nn.Linear(128, num_classes)
-        )
-
-    def forward(self, x):
-        return self.model(x)
-
-
 @st.cache_resource
 def load_models():
     tfidf = pickle.load(open("tfidf.pkl", "rb"))
     le = pickle.load(open("label_encoder.pkl", "rb"))
     scaler = pickle.load(open("scaler.pkl", "rb"))
-
-    model = MLP(tfidf.transform(["test"]).shape[1] + 3, len(le.classes_))
-    model.load_state_dict(torch.load("mlp_model.pth", map_location="cpu"))
-    model.eval()
+    mlp = pickle.load(open("mlp_model.pkl", "rb"))
 
     ner = pipeline("ner", model="dslim/bert-base-NER", aggregation_strategy="simple")
 
-    return model, tfidf, le, scaler, ner
+    return tfidf, le, scaler, mlp, ner
 
 
-model, tfidf, le, scaler, ner = load_models()
+tfidf, le, scaler, mlp, ner = load_models()
 
 # -----------------------------
 # Helper Functions
@@ -81,7 +60,6 @@ def extract_roles(text):
             roles.append(word.replace(",", ""))
     return list(set(roles))
 
-
 # -----------------------------
 # UI Header
 # -----------------------------
@@ -100,13 +78,10 @@ if uploaded_file:
     with st.spinner("Processing resume..."):
         text = extract_text(uploaded_file)
 
-    # -----------------------------
-    # Layout
-    # -----------------------------
     col1, col2 = st.columns([1, 1])
 
     # -----------------------------
-    # LEFT SIDE → Preview
+    # LEFT SIDE → Resume Preview
     # -----------------------------
     with col1:
         st.subheader("📄 Resume Preview")
@@ -117,7 +92,7 @@ if uploaded_file:
     # -----------------------------
     with col2:
 
-        # ---- Classification ----
+        # -------- Classification --------
         cleaned = clean_text(text)
         word_count = len(cleaned.split())
         experience = extract_experience(text)
@@ -127,29 +102,26 @@ if uploaded_file:
         features = np.hstack((tfidf_vec, [[word_count, experience, skill_count]]))
         features = scaler.transform(features)
 
-        tensor = torch.tensor(features, dtype=torch.float32)
-
-        with torch.no_grad():
-            output = model(tensor)
-            probs = torch.softmax(output, dim=1)
-            pred = torch.argmax(probs).item()
+        pred = mlp.predict(features)[0]
+        probs = mlp.predict_proba(features)
 
         category = le.inverse_transform([pred])[0]
-        confidence = float(torch.max(probs))
+        confidence = max(probs[0])
 
         st.subheader("🎯 Predicted Role")
         st.success(f"{category} ({confidence:.2%} confidence)")
 
-        # ---- NER + Rules ----
+        # -------- NER + Rules --------
         name = extract_name(text)
         skills = extract_skills(text)
         roles = extract_roles(text)
 
         entities = ner(text)
         orgs = list(set([e['word'] for e in entities if e['entity_group'] == 'ORG']))
+
+        # Clean orgs
         orgs = [o for o in orgs if len(o) > 3 and o != "t. Ltd"]
 
-        # ---- Display Cards ----
         st.subheader("📊 Extracted Information")
 
         st.markdown(f"**👤 Name:** {name}")
