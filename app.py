@@ -3,7 +3,6 @@ import pickle
 import re
 import numpy as np
 from pdfminer.high_level import extract_text
-from transformers import pipeline
 
 # -----------------------------
 # Page Config
@@ -24,12 +23,10 @@ def load_models():
     scaler = pickle.load(open("scaler.pkl", "rb"))
     mlp = pickle.load(open("mlp_model.pkl", "rb"))
 
-    ner = pipeline("ner", model="dslim/bert-base-NER", aggregation_strategy="simple")
-
-    return tfidf, le, scaler, mlp, ner
+    return tfidf, le, scaler, mlp
 
 
-tfidf, le, scaler, mlp, ner = load_models()
+tfidf, le, scaler, mlp = load_models()
 
 # -----------------------------
 # Helper Functions
@@ -59,6 +56,24 @@ def extract_roles(text):
         if any(r in word for r in ["intern","analyst","engineer","developer"]):
             roles.append(word.replace(",", ""))
     return list(set(roles))
+
+def extract_organizations(text):
+    org_keywords = [
+        "technologies", "pvt", "ltd", "company",
+        "github", "google", "microsoft", "solutions"
+    ]
+
+    orgs = []
+    words = text.split()
+
+    for i in range(len(words)):
+        for k in org_keywords:
+            if k in words[i].lower():
+                phrase = " ".join(words[max(0, i-2):i+2])
+                orgs.append(phrase)
+
+    return list(set(orgs))
+
 
 # -----------------------------
 # UI Header
@@ -111,16 +126,11 @@ if uploaded_file:
         st.subheader("🎯 Predicted Role")
         st.success(f"{category} ({confidence:.2%} confidence)")
 
-        # -------- NER + Rules --------
+        # -------- NER (Rule-Based) --------
         name = extract_name(text)
         skills = extract_skills(text)
         roles = extract_roles(text)
-
-        entities = ner(text)
-        orgs = list(set([e['word'] for e in entities if e['entity_group'] == 'ORG']))
-
-        # Clean orgs
-        orgs = [o for o in orgs if len(o) > 3 and o != "t. Ltd"]
+        orgs = extract_organizations(text)
 
         st.subheader("📊 Extracted Information")
 
