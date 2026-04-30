@@ -4,9 +4,6 @@ import re
 import numpy as np
 from pdfminer.high_level import extract_text
 from sklearn.metrics.pairwise import cosine_similarity
-import matplotlib.pyplot as plt
-from reportlab.platypus import SimpleDocTemplate, Paragraph
-from reportlab.lib.styles import getSampleStyleSheet
 
 # -----------------------------
 # CONFIG
@@ -27,12 +24,12 @@ def load_models():
 tfidf, le, scaler, mlp = load_models()
 
 # -----------------------------
-# ROLE DEFINITIONS
+# ROLE SKILLS (Decision Engine)
 # -----------------------------
 ROLE_SKILLS = {
     "Machine Learning Engineer": ["python","machine learning","numpy","pandas","scikit-learn"],
     "AI Engineer": ["deep learning","tensorflow","nlp"],
-    "Data Analyst": ["sql","excel","power bi","pandas","visualization"]
+    "Data Analyst": ["sql","excel","power bi","pandas"]
 }
 
 # -----------------------------
@@ -44,15 +41,11 @@ def clean_text(text):
 def extract_name(text):
     return text.split("\n")[0].strip()
 
-def extract_experience(text):
-    matches = re.findall(r'(\d+)\s+years?', text.lower())
-    return max([int(m) for m in matches], default=0)
-
 def extract_skills(text):
     skills = [
         "python","java","sql","machine learning","deep learning",
         "tensorflow","pandas","numpy","excel","power bi",
-        "scikit-learn","matplotlib","seaborn","plotly","mongodb","azure","nlp"
+        "scikit-learn","matplotlib","plotly","mongodb","azure","nlp"
     ]
     return list(set([s for s in skills if s in text.lower()]))
 
@@ -72,59 +65,30 @@ def check_role_fit(skills):
     return results
 
 # -----------------------------
-# ATS SCORE
+# ATS (MODEL BASED)
 # -----------------------------
-def calculate_ats_score(skills, exp):
-    score = len(skills) * 4 + min(exp * 5, 30)
-    return min(score, 100)
+def calculate_ats(probs):
+    return int(max(probs) * 100)
 
 # -----------------------------
-# JOB MATCH
+# FEEDBACK (DOMAIN-AWARE)
 # -----------------------------
-def match_job(resume_text, job_desc):
-    v1 = tfidf.transform([resume_text])
-    v2 = tfidf.transform([job_desc])
-    return cosine_similarity(v1, v2)[0][0]
-
-# -----------------------------
-# AI FEEDBACK
-# -----------------------------
-def generate_ai_feedback(skills, exp, ats):
+def generate_feedback(best_role, missing, ats):
     feedback = []
 
     if ats < 50:
-        feedback.append("Your resume is weak. Add more relevant technical skills.")
+        feedback.append("Your resume is not aligned with the target domain.")
     elif ats < 75:
-        feedback.append("Your resume is decent but can be improved.")
+        feedback.append("Your resume is moderately aligned but can be improved.")
     else:
-        feedback.append("Strong resume! You are job-ready.")
+        feedback.append("Strong resume for the selected domain.")
 
-    if exp == 0:
-        feedback.append("Add internships or real-world projects.")
-
-    if "python" not in skills:
-        feedback.append("Learn Python (very important).")
-
-    if "machine learning" not in skills:
-        feedback.append("Add Machine Learning skills.")
+    if missing:
+        feedback.append(f"For {best_role}, improve: {', '.join(missing)}")
+    else:
+        feedback.append(f"You are well-prepared for {best_role} 🚀")
 
     return feedback
-
-# -----------------------------
-# PDF GENERATION
-# -----------------------------
-def generate_pdf(name, skills, ats):
-    file = "report.pdf"
-    doc = SimpleDocTemplate(file)
-    styles = getSampleStyleSheet()
-
-    content = []
-    content.append(Paragraph(f"Name: {name}", styles["Normal"]))
-    content.append(Paragraph(f"ATS Score: {ats}", styles["Normal"]))
-    content.append(Paragraph(f"Skills: {', '.join(skills)}", styles["Normal"]))
-
-    doc.build(content)
-    return file
 
 # -----------------------------
 # UI
@@ -135,103 +99,99 @@ uploaded_file = st.file_uploader("Upload Resume (PDF)", type=["pdf"])
 job_desc = st.text_area("Paste Job Description (Optional)")
 
 if uploaded_file:
-    with st.spinner("Analyzing Resume..."):
+
+    with st.spinner("Analyzing resume..."):
         text = extract_text(uploaded_file)
         cleaned = clean_text(text)
 
-    skills = extract_skills(text)
-    exp = extract_experience(text)
     name = extract_name(text)
+    skills = extract_skills(text)
 
     # -----------------------------
-    # ML Prediction
+    # MODEL PREDICTION
     # -----------------------------
     tfidf_vec = tfidf.transform([cleaned]).toarray()
-    features = np.hstack((tfidf_vec, [[len(cleaned.split()), exp, len(skills)]]))
+    features = np.hstack((tfidf_vec, [[len(cleaned.split()), len(skills), 0]]))
     features = scaler.transform(features)
 
     probs = mlp.predict_proba(features)[0]
-    top3_idx = probs.argsort()[-3:][::-1]
+    top_idx = probs.argsort()[-3:][::-1]
+
+    ats_score = calculate_ats(probs)
 
     # -----------------------------
-    # ROLE ANALYSIS
+    # ROLE ENGINE
     # -----------------------------
     role_results = check_role_fit(skills)
-    ats_score = calculate_ats_score(skills, exp)
+    best_role = max(role_results, key=lambda x: role_results[x]["score"])
+    best_data = role_results[best_role]
 
+    # -----------------------------
+    # JOB MATCH
+    # -----------------------------
     if job_desc:
-        job_score = match_job(cleaned, clean_text(job_desc))
+        job_score = cosine_similarity(
+            tfidf.transform([cleaned]),
+            tfidf.transform([clean_text(job_desc)])
+        )[0][0]
     else:
         job_score = None
 
     # -----------------------------
-    # DISPLAY
+    # UI DISPLAY
     # -----------------------------
-    col1, col2 = st.columns(2)
+    col1, col2 = st.columns([1,1])
 
     with col1:
         st.subheader("📄 Resume Preview")
         st.text_area("", text[:1000], height=400)
 
     with col2:
-        st.subheader("🎯 Top Predictions")
-        for i in top3_idx:
-            role = le.inverse_transform([i])[0]
-            st.write(f"{role} ({probs[i]:.2%})")
-            st.progress(float(probs[i]))
+        st.subheader("🎯 Best Role Recommendation")
 
-        st.subheader("📊 ATS Score")
+        st.success(f"{best_role}")
+
+        st.write("**Confidence (ATS):**")
         st.progress(ats_score/100)
         st.write(f"{ats_score}%")
 
+        st.write("**Top ML Predictions:**")
+        for i in top_idx:
+            role = le.inverse_transform([i])[0]
+            st.write(f"- {role} ({probs[i]:.2%})")
+
         if job_score:
-            st.subheader("💼 Job Match")
+            st.subheader("💼 Job Match Score")
             st.progress(job_score)
             st.write(f"{job_score*100:.2f}% match")
 
     # -----------------------------
-    # ROLE FIT
+    # ROLE DETAILS
     # -----------------------------
-    st.subheader("🧠 Role Eligibility")
-    for role, data in role_results.items():
-        st.write(f"### {role}")
-        st.progress(data["score"])
-        st.write("✅ Matched:", ", ".join(data["matched"]))
-        st.write("❌ Missing:", ", ".join(data["missing"]))
+    st.subheader("🧠 Role Analysis")
+
+    st.write("✅ Matched Skills:", ", ".join(best_data["matched"]))
+    st.write("❌ Missing Skills:", ", ".join(best_data["missing"]))
 
     # -----------------------------
-    # AI FEEDBACK
+    # FEEDBACK
     # -----------------------------
-    st.subheader("🤖 AI Feedback")
-    feedback = generate_ai_feedback(skills, exp, ats_score)
+    st.subheader("🤖 Smart Feedback")
+
+    feedback = generate_feedback(best_role, best_data["missing"], ats_score)
+
     for f in feedback:
         st.write("👉", f)
 
     # -----------------------------
-    # SKILL CHART
-    # -----------------------------
-    st.subheader("📊 Skills Chart")
-    if skills:
-        fig, ax = plt.subplots()
-        ax.barh(skills, [1]*len(skills))
-        st.pyplot(fig)
-
-    # -----------------------------
-    # DOWNLOAD REPORT
-    # -----------------------------
-    st.subheader("📄 Download Report")
-    if st.button("Generate PDF"):
-        file = generate_pdf(name, skills, ats_score)
-        with open(file, "rb") as f:
-            st.download_button("Download", f, file_name="report.pdf")
-
-    # -----------------------------
     # JSON OUTPUT
     # -----------------------------
-    st.subheader("📦 JSON Output")
+    st.subheader("📦 Structured Output")
+
     st.json({
         "name": name,
+        "best_role": best_role,
+        "ats_score": ats_score,
         "skills": skills,
-        "experience": exp,
-        "ats_score": ats_score
+        "missing_skills": best_data["missing"]
     })
