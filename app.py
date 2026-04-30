@@ -5,7 +5,7 @@ import numpy as np
 from pdfminer.high_level import extract_text
 
 # -----------------------------
-# Page Config
+# PAGE CONFIG
 # -----------------------------
 st.set_page_config(
     page_title="AI Resume Screener",
@@ -14,7 +14,7 @@ st.set_page_config(
 )
 
 # -----------------------------
-# Load Models
+# LOAD MODELS
 # -----------------------------
 @st.cache_resource
 def load_models():
@@ -27,7 +27,7 @@ def load_models():
 tfidf, le, scaler, mlp = load_models()
 
 # -----------------------------
-# Helper Functions
+# HELPERS
 # -----------------------------
 def clean_text(text):
     return re.sub(r'[^a-zA-Z ]', '', text).lower()
@@ -38,7 +38,7 @@ def extract_experience(text):
     return max(valid) if valid else 0
 
 def extract_name(text):
-    return text.split("\n")[0]
+    return text.split("\n")[0].strip()
 
 def extract_skills(text):
     skills = [
@@ -46,7 +46,7 @@ def extract_skills(text):
         "tensorflow","pandas","numpy","excel","power bi",
         "scikit-learn","matplotlib","seaborn","plotly","mongodb","azure"
     ]
-    return [s for s in skills if s in text.lower()]
+    return sorted(list(set([s for s in skills if s in text.lower()])))
 
 def extract_roles(text):
     roles = []
@@ -56,73 +56,112 @@ def extract_roles(text):
     return list(set(roles))
 
 def extract_organizations(text):
-    org_keywords = [
-        "technologies", "pvt", "ltd", "company",
-        "github", "google", "microsoft", "solutions"
-    ]
+    org_keywords = ["pvt", "ltd", "technologies", "company", "solutions"]
+
     orgs = []
-    words = text.split()
-    for i in range(len(words)):
-        for k in org_keywords:
-            if k in words[i].lower():
-                phrase = " ".join(words[max(0, i-2):i+2])
-                orgs.append(phrase)
+    lines = text.split("\n")
+
+    for line in lines:
+        line_lower = line.lower()
+        if any(k in line_lower for k in org_keywords):
+            if len(line.split()) < 10:  # avoid long noisy lines
+                orgs.append(line.strip())
+
     return list(set(orgs))
 
+
 # -----------------------------
-# UI
+# UI HEADER
 # -----------------------------
 st.title("📄 AI Resume Screener")
-st.markdown("Upload your resume to classify and extract details.")
+st.markdown("Upload your resume to classify job role and extract structured insights.")
 
 uploaded_file = st.file_uploader("Upload Resume (PDF)", type=["pdf"])
 
+# -----------------------------
+# MAIN LOGIC
+# -----------------------------
 if uploaded_file:
-    with st.spinner("Processing resume..."):
+    with st.spinner("🔍 Analyzing resume..."):
         text = extract_text(uploaded_file)
 
-    col1, col2 = st.columns(2)
+    col1, col2 = st.columns([1, 1])
 
-    # LEFT
+    # -----------------------------
+    # LEFT SIDE
+    # -----------------------------
     with col1:
         st.subheader("📄 Resume Preview")
         st.text_area("", text[:1000], height=400)
 
-    # RIGHT
+    # -----------------------------
+    # RIGHT SIDE
+    # -----------------------------
     with col2:
+
+        # ---- Feature Engineering ----
         cleaned = clean_text(text)
         word_count = len(cleaned.split())
         experience = extract_experience(text)
-        skill_count = len(extract_skills(text))
+        skill_list = extract_skills(text)
+        skill_count = len(skill_list)
 
         tfidf_vec = tfidf.transform([cleaned]).toarray()
         features = np.hstack((tfidf_vec, [[word_count, experience, skill_count]]))
         features = scaler.transform(features)
 
-        pred = mlp.predict(features)[0]
-        probs = mlp.predict_proba(features)
+        # ---- Prediction ----
+        probs = mlp.predict_proba(features)[0]
+        top3_idx = probs.argsort()[-3:][::-1]
 
-        category = le.inverse_transform([pred])[0]
-        confidence = max(probs[0])
+        st.subheader("🎯 Top Matching Roles")
+        for i in top3_idx:
+            role = le.inverse_transform([i])[0]
+            score = probs[i]
+            st.progress(float(score))
+            st.write(f"👉 **{role}** ({score:.2%})")
 
-        st.subheader("🎯 Predicted Role")
-        st.success(f"{category} ({confidence:.2%})")
-
+        # ---- Extraction ----
         name = extract_name(text)
-        skills = extract_skills(text)
         roles = extract_roles(text)
         orgs = extract_organizations(text)
 
-        st.subheader("📊 Extracted Info")
-        st.write(f"👤 Name: {name}")
-        st.write(f"🏢 Organizations: {', '.join(orgs)}")
-        st.write(f"🧠 Skills: {', '.join(skills)}")
-        st.write(f"💼 Roles: {', '.join(roles)}")
+        # Remove skill contamination
+        orgs = [o for o in orgs if not any(s in o.lower() for s in skill_list)]
 
-    st.subheader("📦 JSON Output")
-    st.json({
+        st.subheader("📊 Extracted Information")
+
+        st.markdown(f"**👤 Name:** {name}")
+
+        st.markdown("**🏢 Organizations:**")
+        if orgs:
+            for org in orgs:
+                st.write(f"• {org}")
+        else:
+            st.write("Not detected")
+
+        st.markdown("**🧠 Skills:**")
+        if skill_list:
+            st.write(", ".join(skill_list))
+        else:
+            st.write("Not detected")
+
+        st.markdown("**💼 Roles:**")
+        if roles:
+            st.write(", ".join(roles))
+        else:
+            st.write("Not detected")
+
+    # -----------------------------
+    # JSON OUTPUT
+    # -----------------------------
+    st.subheader("📦 Structured JSON Output")
+
+    result = {
         "name": name,
         "organizations": orgs,
-        "skills": skills,
+        "skills": skill_list,
         "roles": roles
-    })
+    }
+
+    st.json(result)
