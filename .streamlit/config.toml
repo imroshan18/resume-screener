@@ -1,0 +1,7 @@
+[server]
+   maxUploadSize = 10
+   enableXsrfProtection = false
+
+   [theme]
+   base = "light"
+   primaryColor = "#4F8BF9"
